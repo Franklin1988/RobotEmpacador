@@ -1,19 +1,32 @@
-let gameMode = 'basic';
-let currentLevelIdx = 0;
-let isRunning = false;
-let commandQueue = [];
-let timerInterval;
-let startTime;
+var gameMode = 'basic';
+var currentLevelIdx = 0;
+var isRunning = false;
+var commandQueue = [];
+var timerInterval;
+var startTime;
 
 function startMode(mode) {
     gameMode = mode;
     document.getElementById('main-menu').style.display = 'none';
+
+    // 1. Encendemos la luz y mostramos la pantalla
     document.getElementById('game-screen').style.display = 'flex';
 
-    if (mode === 'basic') {
-        currentLevelIdx = 0;
-        loadLevel(currentLevelIdx);
-    }
+    // 2. Le damos un "respiro" de 50 milisegundos al navegador para que
+    // termine de dibujar todo antes de llamar a nuestro pintor (Phaser)
+    setTimeout(function() {
+        if (window.iniciarMotorDeJuego) {
+            window.iniciarMotorDeJuego();
+        }
+
+        if (mode === 'basic') {
+            currentLevelIdx = 0;
+            // Un pequeño retardo adicional para que la escena de Phaser se cree
+            setTimeout(function() {
+                loadLevel(currentLevelIdx);
+            }, 200);
+        }
+    }, 50); // <-- Esos 50 son los milisegundos de espera
 }
 
 function goToMenu() {
@@ -36,8 +49,8 @@ function resetGameState() {
 
 function startTimer() {
     startTime = Date.now();
-    timerInterval = setInterval(() => {
-        const elapsed = (Date.now() - startTime) / 1000;
+    timerInterval = setInterval(function() {
+        var elapsed = (Date.now() - startTime) / 1000;
         document.getElementById('timer').innerText = elapsed.toFixed(1) + 's';
     }, 100);
 }
