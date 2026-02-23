@@ -3,13 +3,16 @@ package com.example.robotempacador
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -23,6 +26,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // --- CLASES DE DATOS (ESTADO DEL JUEGO) ---
 data class Position(val x: Int, val y: Int)
@@ -32,26 +37,33 @@ data class GameState(
     val boxPos: Position = Position(2, 2),
     val targetPos: Position = Position(4, 0),
     val hasBox: Boolean = false,
-    val commands: List<String> = emptyList()
+    val commands: List<String> = emptyList(),
+    val isExecuting: Boolean = false
 )
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
             MaterialTheme {
-                Surface(
+                Scaffold(
                     modifier = Modifier.fillMaxSize(),
-                    color = Color(0xFFE0F7FA)
-                ) {
+                    containerColor = Color(0xFFE0F7FA)
+                ) { innerPadding ->
                     var gameState by remember { mutableStateOf(GameState()) }
+                    val scope = rememberCoroutineScope()
 
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(16.dp),
+                            .padding(innerPadding)
+                            .padding(horizontal = 16.dp)
+                            .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
                         Text(
                             text = "🤖 Robot Kids Nativo",
                             fontSize = 28.sp,
@@ -77,8 +89,30 @@ class MainActivity : ComponentActivity() {
                             },
                             onClear = {
                                 gameState = gameState.copy(commands = emptyList())
+                            },
+                            isExecuting = gameState.isExecuting,
+                            onExecute = {
+                                scope.launch {
+                                    gameState = gameState.copy(isExecuting = true)
+                                    val commandsToRun = gameState.commands
+                                    for (cmd in commandsToRun) {
+                                        val currentPos = gameState.robotPos
+                                        var newPos = currentPos
+                                        when (cmd) {
+                                            "ARRIBA" -> if (currentPos.y > 0) newPos = currentPos.copy(y = currentPos.y - 1)
+                                            "ABAJO" -> if (currentPos.y < 4) newPos = currentPos.copy(y = currentPos.y + 1)
+                                            "IZQUIERDA" -> if (currentPos.x > 0) newPos = currentPos.copy(x = currentPos.x - 1)
+                                            "DERECHA" -> if (currentPos.x < 4) newPos = currentPos.copy(x = currentPos.x + 1)
+                                        }
+                                        gameState = gameState.copy(robotPos = newPos)
+                                        delay(500L)
+                                    }
+                                    gameState = gameState.copy(isExecuting = false, commands = emptyList())
+                                }
                             }
                         )
+                        
+                        Spacer(modifier = Modifier.height(32.dp))
                     }
                 }
             }
@@ -182,17 +216,22 @@ fun CommandIcon(cmd: String) {
 }
 
 @Composable
-fun ControlPanel(onCommandAdd: (String) -> Unit, onClear: () -> Unit) {
+fun ControlPanel(
+    onCommandAdd: (String) -> Unit,
+    onClear: () -> Unit,
+    isExecuting: Boolean,
+    onExecute: () -> Unit
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         // Cruz de direcciones
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            ControlButton(Icons.Default.KeyboardArrowUp, "ARRIBA") { onCommandAdd("ARRIBA") }
+            ControlButton(Icons.Default.KeyboardArrowUp, "ARRIBA", !isExecuting) { onCommandAdd("ARRIBA") }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ControlButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "IZQUIERDA") { onCommandAdd("IZQUIERDA") }
+                ControlButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "IZQUIERDA", !isExecuting) { onCommandAdd("IZQUIERDA") }
                 Spacer(modifier = Modifier.width(48.dp))
-                ControlButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "DERECHA") { onCommandAdd("DERECHA") }
+                ControlButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "DERECHA", !isExecuting) { onCommandAdd("DERECHA") }
             }
-            ControlButton(Icons.Default.KeyboardArrowDown, "ABAJO") { onCommandAdd("ABAJO") }
+            ControlButton(Icons.Default.KeyboardArrowDown, "ABAJO", !isExecuting) { onCommandAdd("ABAJO") }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -201,6 +240,7 @@ fun ControlPanel(onCommandAdd: (String) -> Unit, onClear: () -> Unit) {
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Button(
                 onClick = { onCommandAdd("TOMAR") },
+                enabled = !isExecuting,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
                 shape = RoundedCornerShape(8.dp)
             ) {
@@ -208,6 +248,7 @@ fun ControlPanel(onCommandAdd: (String) -> Unit, onClear: () -> Unit) {
             }
             Button(
                 onClick = { onCommandAdd("DEJAR") },
+                enabled = !isExecuting,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
                 shape = RoundedCornerShape(8.dp)
             ) {
@@ -216,30 +257,52 @@ fun ControlPanel(onCommandAdd: (String) -> Unit, onClear: () -> Unit) {
         }
         
         Spacer(modifier = Modifier.height(12.dp))
+
+        // Botón Ejecutar
+        Button(
+            onClick = onExecute,
+            enabled = !isExecuting,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Text("▶ EJECUTAR GUION", fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
         
         // Botón de Limpiar
-        TextButton(onClick = onClear) {
-            Icon(Icons.Default.Delete, contentDescription = null, tint = Color.Red)
+        TextButton(onClick = onClear, enabled = !isExecuting) {
+            Icon(
+                Icons.Default.Delete,
+                contentDescription = null,
+                tint = if (!isExecuting) Color.Red else Color.Gray
+            )
             Spacer(modifier = Modifier.width(4.dp))
-            Text("BORRAR GUION", color = Color.Red, fontWeight = FontWeight.Bold)
+            Text(
+                "BORRAR GUION",
+                color = if (!isExecuting) Color.Red else Color.Gray,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
 
 @Composable
-fun ControlButton(icon: ImageVector, label: String, onClick: () -> Unit) {
+fun ControlButton(icon: ImageVector, label: String, enabled: Boolean = true, onClick: () -> Unit) {
     IconButton(
         onClick = onClick,
+        enabled = enabled,
         modifier = Modifier
             .size(56.dp)
             .padding(4.dp)
-            .background(Color.White, CircleShape)
-            .border(2.dp, Color(0xFF2196F3), CircleShape)
+            .background(if (enabled) Color.White else Color.LightGray.copy(alpha = 0.3f), CircleShape)
+            .border(2.dp, if (enabled) Color(0xFF2196F3) else Color.Gray, CircleShape)
     ) {
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = Color(0xFF2196F3),
+            tint = if (enabled) Color(0xFF2196F3) else Color.Gray,
             modifier = Modifier.size(32.dp)
         )
     }
