@@ -77,9 +77,25 @@ data class GameState(
     val hasAttempted: Boolean = false,
     val executingCommandIndex: Int? = null,
     val errorMessage: String? = null,
-    val secondsElapsed: Int = 0,
     val showLevelSelector: Boolean = false
 )
+
+// --- GESTOR DE RÉCORDS ---
+class RecordManager(context: Context) {
+    private val prefs = context.getSharedPreferences("robot_kids_records", Context.MODE_PRIVATE)
+
+    fun saveBestTime(levelIndex: Int, timeInSeconds: Int) {
+        val currentBest = getBestTime(levelIndex)
+        if (currentBest == null || timeInSeconds < currentBest) {
+            prefs.edit().putInt("cajas_level_$levelIndex", timeInSeconds).apply()
+        }
+    }
+
+    fun getBestTime(levelIndex: Int): Int? {
+        val time = prefs.getInt("cajas_level_$levelIndex", -1)
+        return if (time == -1) null else time
+    }
+}
 
 class MainActivity : ComponentActivity() {
     private var toneGenerator: ToneGenerator? = null
@@ -94,16 +110,15 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current
+            val recordManager = remember { RecordManager(context) }
             var currentScreen by remember { mutableStateOf(AppScreen.MENU) }
             var gameState by remember { mutableStateOf(GameState()) }
-            val scope = rememberCoroutineScope()
 
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFE0F7FA)) {
                     when (currentScreen) {
                         AppScreen.MENU -> MainMenuScreen { screen ->
                             if (screen == AppScreen.MODO_CAJAS) {
-                                // Resetear juego al entrar
                                 val firstLevel = levels[0]
                                 gameState = GameState(
                                     currentLevelIndex = 0,
@@ -118,10 +133,11 @@ class MainActivity : ComponentActivity() {
                             gameState = gameState,
                             onStateChange = { gameState = it },
                             onBack = { currentScreen = AppScreen.MENU },
-                            toneGenerator = toneGenerator
+                            toneGenerator = toneGenerator,
+                            recordManager = recordManager
                         )
                         AppScreen.MODO_SUMAS -> ComingSoonScreen("🔢 Modo Sumas") { currentScreen = AppScreen.MENU }
-                        AppScreen.RECORDS -> ComingSoonScreen("🏆 Récords") { currentScreen = AppScreen.MENU }
+                        AppScreen.RECORDS -> RecordsScreen(recordManager) { currentScreen = AppScreen.MENU }
                     }
                 }
             }
@@ -138,7 +154,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainMenuScreen(onNavigate: (AppScreen) -> Unit) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -174,7 +190,7 @@ fun MenuButton(text: String, color: Color, onClick: () -> Unit) {
 @Composable
 fun ComingSoonScreen(title: String, onBack: () -> Unit) {
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().safeDrawingPadding(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -185,20 +201,84 @@ fun ComingSoonScreen(title: String, onBack: () -> Unit) {
 }
 
 @Composable
+fun RecordsScreen(recordManager: RecordManager, onBack: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "🏆 Récords Modo Cajas",
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF2196F3),
+            modifier = Modifier.padding(vertical = 24.dp)
+        )
+
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(1),
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(10) { index ->
+                val bestTime = recordManager.getBestTime(index)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = "Nivel ${index + 1}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (bestTime != null) "${bestTime}s" else "No jugado",
+                            fontSize = 18.sp,
+                            color = if (bestTime != null) Color(0xFF4CAF50) else Color.Gray
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(
+            onClick = onBack,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text("Volver al Menú")
+        }
+    }
+}
+
+@Composable
 fun GameScreen(
     gameState: GameState,
     onStateChange: (GameState) -> Unit,
     onBack: () -> Unit,
-    toneGenerator: ToneGenerator?
+    toneGenerator: ToneGenerator?,
+    recordManager: RecordManager
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    
+    // El tiempo se reiniciará a 0 automáticamente cada vez que cambiemos de nivel
+    var secondsElapsed by remember(gameState.currentLevelIndex) { mutableIntStateOf(0) }
+    
+    // Obtenemos el mejor tiempo actual
+    val bestTime = remember(gameState.currentLevelIndex, gameState.isVictory) { 
+        recordManager.getBestTime(gameState.currentLevelIndex) 
+    }
 
     // --- CRONÓMETRO ---
     LaunchedEffect(gameState.isExecuting, gameState.isVictory) {
-        while (!gameState.isVictory) {
-            delay(1000L)
-            onStateChange(gameState.copy(secondsElapsed = gameState.secondsElapsed + 1))
+        if (gameState.isExecuting && !gameState.isVictory) {
+            while (gameState.isExecuting && !gameState.isVictory) {
+                delay(1000L)
+                secondsElapsed++
+            }
         }
     }
 
@@ -218,7 +298,7 @@ fun GameScreen(
         )
     } else {
         Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // CABECERA CON VOLVER Y TIEMPO
@@ -231,15 +311,22 @@ fun GameScreen(
                     Icon(Icons.Default.Home, contentDescription = "Menú", tint = Color(0xFF2196F3), modifier = Modifier.size(32.dp))
                 }
                 
-                Text(
-                    text = "🌟 Nivel ${gameState.currentLevelIndex + 1} 🌟",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clickable { onStateChange(gameState.copy(showLevelSelector = true)) }
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "🌟 Nivel ${gameState.currentLevelIndex + 1} 🌟",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable { onStateChange(gameState.copy(showLevelSelector = true)) }
+                    )
+                    Text(
+                        text = "🏆 Mejor: ${bestTime?.let { \"${it}s\" } ?: \"--\"}",
+                        fontSize = 12.sp,
+                        color = Color(0xFF757575)
+                    )
+                }
 
-                val minutes = gameState.secondsElapsed / 60
-                val seconds = gameState.secondsElapsed % 60
+                val minutes = secondsElapsed / 60
+                val seconds = secondsElapsed % 60
                 Text(
                     text = "⏱️ %02d:%02d".format(minutes, seconds),
                     fontSize = 20.sp,
@@ -276,13 +363,14 @@ fun GameScreen(
             Spacer(modifier = Modifier.height(8.dp))
             Box(modifier = Modifier.weight(1f, fill = false)) { GameBoard(state = gameState) }
             Spacer(modifier = Modifier.height(8.dp))
-            CommandList(commands = gameState.commands, executingIndex = gameState.executingCommandIndex)
+            CommandList(commands = gameState.commands, executingCommandIndex = gameState.executingCommandIndex)
             Spacer(modifier = Modifier.height(8.dp))
 
             // EJECUTAR
             Button(
                 onClick = {
                     if (gameState.hasAttempted || gameState.errorMessage != null) {
+                        secondsElapsed = 0
                         val currentLevel = levels[gameState.currentLevelIndex]
                         onStateChange(gameState.copy(
                             commands = emptyList(),
@@ -297,45 +385,68 @@ fun GameScreen(
                     } else {
                         scope.launch {
                             val currentLevel = levels[gameState.currentLevelIndex]
-                            onStateChange(gameState.copy(isExecuting = true, executingCommandIndex = 0, robotPos = currentLevel.robotPos, boxPos = currentLevel.boxPos, hasBox = false, isVictory = false, errorMessage = null))
                             
-                            val commandsToRun = gameState.commands
+                            var currentState = gameState.copy(
+                                isExecuting = true, 
+                                executingCommandIndex = 0, 
+                                robotPos = currentLevel.robotPos, 
+                                boxPos = currentLevel.boxPos, 
+                                hasBox = false, 
+                                isVictory = false, 
+                                errorMessage = null
+                            )
+                            onStateChange(currentState)
+                            
+                            val commandsToRun = currentState.commands
                             var currentError: String? = null
 
                             for ((index, cmd) in commandsToRun.withIndex()) {
-                                onStateChange(gameState.copy(executingCommandIndex = index))
-                                val currentPos = gameState.robotPos
+                                currentState = currentState.copy(executingCommandIndex = index)
+                                onStateChange(currentState)
+                                delay(400L)
+                                
+                                val currentPos = currentState.robotPos
                                 var newPos = currentPos
-                                var newHasBox = gameState.hasBox
-                                var newBoxPos = gameState.boxPos
-                                var moveSuccess = false
-                                var actionSuccess = false
-
+                                var newHasBox = currentState.hasBox
+                                var newBoxPos = currentState.boxPos
+                                
                                 when (cmd) {
-                                    "ARRIBA" -> if (currentPos.y > 0 && !currentLevel.walls.contains(currentPos.copy(y = currentPos.y - 1))) { newPos = currentPos.copy(y = currentPos.y - 1); moveSuccess = true } else currentError = "¡Bip bop! Muro."
-                                    "ABAJO" -> if (currentPos.y < 4 && !currentLevel.walls.contains(currentPos.copy(y = currentPos.y + 1))) { newPos = currentPos.copy(y = currentPos.y + 1); moveSuccess = true } else currentError = "¡Bip bop! Muro."
-                                    "IZQUIERDA" -> if (currentPos.x > 0 && !currentLevel.walls.contains(currentPos.copy(x = currentPos.x - 1))) { newPos = currentPos.copy(x = currentPos.x - 1); moveSuccess = true } else currentError = "¡Bip bop! Muro."
-                                    "DERECHA" -> if (currentPos.x < 4 && !currentLevel.walls.contains(currentPos.copy(x = currentPos.x + 1))) { newPos = currentPos.copy(x = currentPos.x + 1); moveSuccess = true } else currentError = "¡Bip bop! Muro."
-                                    "TOMAR" -> if (currentPos == gameState.boxPos && !gameState.hasBox) { newHasBox = true; actionSuccess = true } else currentError = "No hay nada aquí."
-                                    "DEJAR" -> if (gameState.hasBox) { newHasBox = false; newBoxPos = currentPos; actionSuccess = true } else currentError = "No tengo caja."
+                                    "ARRIBA" -> if (currentPos.y > 0 && !currentLevel.walls.contains(currentPos.copy(y = currentPos.y - 1))) newPos = currentPos.copy(y = currentPos.y - 1) else currentError = "¡Bip bop! Muro."
+                                    "ABAJO" -> if (currentPos.y < 4 && !currentLevel.walls.contains(currentPos.copy(y = currentPos.y + 1))) newPos = currentPos.copy(y = currentPos.y + 1) else currentError = "¡Bip bop! Muro."
+                                    "IZQUIERDA" -> if (currentPos.x > 0 && !currentLevel.walls.contains(currentPos.copy(x = currentPos.x - 1))) newPos = currentPos.copy(x = currentPos.x - 1) else currentError = "¡Bip bop! Muro."
+                                    "DERECHA" -> if (currentPos.x < 4 && !currentLevel.walls.contains(currentPos.copy(x = currentPos.x + 1))) newPos = currentPos.copy(x = currentPos.x + 1) else currentError = "¡Bip bop! Muro."
+                                    "TOMAR" -> if (currentPos == currentState.boxPos && !currentState.hasBox) newHasBox = true else currentError = "No hay nada aquí."
+                                    "DEJAR" -> if (currentState.hasBox) { newHasBox = false; newBoxPos = currentPos } else currentError = "No tengo caja."
                                 }
 
                                 if (currentError != null) {
                                     playEffect(context, toneGenerator, true)
-                                    onStateChange(gameState.copy(errorMessage = currentError, isExecuting = false, hasAttempted = true, executingCommandIndex = null))
+                                    currentState = currentState.copy(errorMessage = currentError, isExecuting = false, hasAttempted = true, executingCommandIndex = null)
+                                    onStateChange(currentState)
                                     break
                                 }
 
                                 playEffect(context, toneGenerator, false)
                                 if (newHasBox && newPos != currentPos) newBoxPos = newPos
-                                onStateChange(gameState.copy(robotPos = newPos, hasBox = newHasBox, boxPos = newBoxPos))
-                                delay(800L)
+                                currentState = currentState.copy(robotPos = newPos, hasBox = newHasBox, boxPos = newBoxPos)
+                                onStateChange(currentState)
+                                delay(600L)
                             }
 
                             if (currentError == null) {
-                                val victory = gameState.boxPos == gameState.targetPos && !gameState.hasBox
-                                if (victory) playVictory(context, toneGenerator)
-                                onStateChange(gameState.copy(isExecuting = false, isVictory = victory, errorMessage = if (victory) null else "¡A medias!", hasAttempted = true, executingCommandIndex = null))
+                                val victory = currentState.boxPos == currentState.targetPos && !currentState.hasBox
+                                if (victory) {
+                                    playVictory(context, toneGenerator)
+                                    recordManager.saveBestTime(currentState.currentLevelIndex, secondsElapsed)
+                                }
+                                currentState = currentState.copy(
+                                    isExecuting = false, 
+                                    isVictory = victory, 
+                                    errorMessage = if (victory) null else "¡A medias!", 
+                                    hasAttempted = true, 
+                                    executingCommandIndex = null
+                                )
+                                onStateChange(currentState)
                             }
                         }
                     }
@@ -351,7 +462,7 @@ fun GameScreen(
             Spacer(modifier = Modifier.height(8.dp))
             ControlPanel(
                 onCommandAdd = { cmd -> if (!gameState.isExecuting && !gameState.isVictory && !gameState.hasAttempted && gameState.errorMessage == null) onStateChange(gameState.copy(commands = gameState.commands + cmd)) },
-                onClear = { val level = levels[gameState.currentLevelIndex]; onStateChange(gameState.copy(commands = emptyList(), robotPos = level.robotPos, boxPos = level.boxPos, hasBox = false, isVictory = false, hasAttempted = false, executingCommandIndex = null, errorMessage = null, secondsElapsed = 0)) },
+                onClear = { val level = levels[gameState.currentLevelIndex]; secondsElapsed = 0; onStateChange(gameState.copy(commands = emptyList(), robotPos = level.robotPos, boxPos = level.boxPos, hasBox = false, isVictory = false, hasAttempted = false, executingCommandIndex = null, errorMessage = null)) },
                 isExecuting = gameState.isExecuting,
                 isVictory = gameState.isVictory,
                 hasAttempted = gameState.hasAttempted || gameState.errorMessage != null
@@ -436,7 +547,7 @@ fun GameBoard(state: GameState) {
                         modifier = Modifier.size(55.dp).border(0.5.dp, Color.LightGray),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (level.walls.contains(pos)) Box(Modifier.fillMaxSize().background(Color.DarkGray))
+                        if (level.walls.contains(pos)) Text("🧱", fontSize = 26.sp)
                         if (level.targetPos == pos) Text("🏁", fontSize = 20.sp)
                         if (state.boxPos == pos && !state.hasBox) Text("📦", fontSize = 26.sp)
                         if (state.robotPos == pos) Text(if (state.hasBox) "🤖📦" else "🤖", fontSize = 26.sp)
@@ -448,9 +559,22 @@ fun GameBoard(state: GameState) {
 }
 
 @Composable
-fun CommandList(commands: List<String>, executingIndex: Int?) {
+fun CommandList(commands: List<String>, executingCommandIndex: Int?) {
     val listState = rememberLazyListState()
-    LaunchedEffect(commands.size) { if (commands.isNotEmpty()) listState.animateScrollToItem(commands.size - 1) }
+    
+    LaunchedEffect(executingCommandIndex) {
+        if (executingCommandIndex == 0) {
+            listState.scrollToItem(0)
+        } else if (executingCommandIndex != null) {
+            listState.animateScrollToItem(executingCommandIndex)
+        }
+    }
+
+    LaunchedEffect(commands.size) {
+        if (commands.isNotEmpty() && executingCommandIndex == null) {
+            listState.animateScrollToItem(commands.size - 1)
+        }
+    }
 
     LazyRow(
         state = listState,
@@ -458,7 +582,7 @@ fun CommandList(commands: List<String>, executingIndex: Int?) {
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         itemsIndexed(commands) { index, cmd ->
-            val isExecuting = executingIndex == index
+            val isExecuting = executingCommandIndex == index
             Card(
                 colors = CardDefaults.cardColors(containerColor = if (isExecuting) Color.Yellow else Color.White),
                 elevation = CardDefaults.cardElevation(2.dp)
