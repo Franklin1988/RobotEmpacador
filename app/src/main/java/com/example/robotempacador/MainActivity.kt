@@ -8,8 +8,6 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,16 +21,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -71,6 +65,35 @@ data class GameState(
     val boxPos: Position = levels[0].boxPos,
     val targetPos: Position = levels[0].targetPos,
     val hasBox: Boolean = false,
+    val commands: List<String> = emptyList(),
+    val isExecuting: Boolean = false,
+    val isVictory: Boolean = false,
+    val hasAttempted: Boolean = false,
+    val executingCommandIndex: Int? = null,
+    val errorMessage: String? = null,
+    val showLevelSelector: Boolean = false
+)
+
+// --- MODELOS MODO SUMAS ---
+data class MathLevel(
+    val robotPos: Position,
+    val targetPos: Position,
+    val targetSum: Int,
+    val numbers: Map<Position, Int>,
+    val walls: List<Position> = emptyList()
+)
+
+val mathLevels = listOf(
+    MathLevel(Position(0, 4), Position(4, 0), targetSum = 10, numbers = mapOf(Position(2, 2) to 5, Position(2, 4) to 3, Position(4, 2) to 2)),
+    MathLevel(Position(0, 0), Position(4, 4), targetSum = 7, numbers = mapOf(Position(2, 2) to 4, Position(0, 2) to 3, Position(4, 0) to 1), walls = listOf(Position(1, 1))),
+    MathLevel(Position(4, 4), Position(0, 0), targetSum = 15, numbers = mapOf(Position(2, 2) to 8, Position(0, 2) to 7, Position(2, 0) to 5), walls = listOf(Position(3, 3)))
+)
+
+data class MathGameState(
+    val currentLevelIndex: Int = 0,
+    val robotPos: Position = mathLevels[0].robotPos,
+    val currentSum: Int = 0,
+    val pickedPositions: List<Position> = emptyList(),
     val commands: List<String> = emptyList(),
     val isExecuting: Boolean = false,
     val isVictory: Boolean = false,
@@ -136,7 +159,10 @@ class MainActivity : ComponentActivity() {
                             toneGenerator = toneGenerator,
                             recordManager = recordManager
                         )
-                        AppScreen.MODO_SUMAS -> ComingSoonScreen("🔢 Modo Sumas") { currentScreen = AppScreen.MENU }
+                        AppScreen.MODO_SUMAS -> MathGameScreen(
+                            onBack = { currentScreen = AppScreen.MENU },
+                            toneGenerator = toneGenerator
+                        )
                         AppScreen.RECORDS -> RecordsScreen(recordManager) { currentScreen = AppScreen.MENU }
                     }
                 }
@@ -188,15 +214,240 @@ fun MenuButton(text: String, color: Color, onClick: () -> Unit) {
 }
 
 @Composable
-fun ComingSoonScreen(title: String, onBack: () -> Unit) {
+fun MathGameScreen(onBack: () -> Unit, toneGenerator: ToneGenerator?) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var mathState by remember { mutableStateOf(MathGameState()) }
+    val currentMathLevel = mathLevels[mathState.currentLevelIndex]
+    
     Column(
-        modifier = Modifier.fillMaxSize().safeDrawingPadding(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(text = title, fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2196F3))
-        Text(text = "¡Próximamente!", fontSize = 24.sp, modifier = Modifier.padding(16.dp))
-        Button(onClick = onBack) { Text("Volver al Menú") }
+        // CABECERA
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.Home, contentDescription = "Menú", tint = Color(0xFF2196F3), modifier = Modifier.size(32.dp))
+            }
+            
+            Text(
+                text = "🌟 Nivel ${mathState.currentLevelIndex + 1} 🌟",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            
+            Spacer(modifier = Modifier.size(32.dp))
+        }
+
+        // BANNER COLORIDO
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFD600)),
+            shape = RoundedCornerShape(16.dp),
+            elevation = CardDefaults.cardElevation(8.dp)
+        ) {
+            Text(
+                text = "🔋 Necesito una suma de: ${currentMathLevel.targetSum} 🔋",
+                modifier = Modifier.padding(12.dp).align(Alignment.CenterHorizontally),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Black,
+                color = Color.Black
+            )
+        }
+        
+        Text(
+            text = "🎒 Mochila actual: ${mathState.currentSum}",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF4CAF50),
+            modifier = Modifier.padding(vertical = 4.dp)
+        )
+
+        if (mathState.errorMessage != null) {
+            Text(text = mathState.errorMessage!!, color = Color.Red, fontWeight = FontWeight.Bold)
+        }
+
+        if (mathState.isVictory) {
+            Button(
+                onClick = {
+                    val nextIndex = (mathState.currentLevelIndex + 1) % mathLevels.size
+                    val nextLevel = mathLevels[nextIndex]
+                    mathState = MathGameState(
+                        currentLevelIndex = nextIndex,
+                        robotPos = nextLevel.robotPos
+                    )
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                modifier = Modifier.fillMaxWidth().height(45.dp)
+            ) {
+                Text(text = if (mathState.currentLevelIndex < mathLevels.size - 1) "¡SIGUIENTE TESORO! 💎" else "¡REINICIAR! 🔄", fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Box(modifier = Modifier.weight(1f, fill = false)) { MathGameBoard(state = mathState) }
+        Spacer(modifier = Modifier.height(8.dp))
+        CommandList(commands = mathState.commands, executingCommandIndex = mathState.executingCommandIndex)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // EJECUTAR
+        Button(
+            onClick = {
+                if (mathState.hasAttempted || mathState.errorMessage != null) {
+                    val currentLevel = mathLevels[mathState.currentLevelIndex]
+                    mathState = mathState.copy(
+                        commands = emptyList(),
+                        robotPos = currentLevel.robotPos,
+                        currentSum = 0,
+                        pickedPositions = emptyList(),
+                        isVictory = false,
+                        hasAttempted = false,
+                        executingCommandIndex = null,
+                        errorMessage = null
+                    )
+                } else {
+                    scope.launch {
+                        val level = mathLevels[mathState.currentLevelIndex]
+                        var currentLocalState = mathState.copy(
+                            isExecuting = true, 
+                            executingCommandIndex = 0, 
+                            robotPos = level.robotPos, 
+                            currentSum = 0,
+                            pickedPositions = emptyList(),
+                            isVictory = false, 
+                            errorMessage = null
+                        )
+                        mathState = currentLocalState
+                        
+                        val commandsToRun = currentLocalState.commands
+                        var currentError: String? = null
+
+                        for ((index, cmd) in commandsToRun.withIndex()) {
+                            currentLocalState = currentLocalState.copy(executingCommandIndex = index)
+                            mathState = currentLocalState
+                            delay(400L)
+                            
+                            val curPos = currentLocalState.robotPos
+                            var nPos = curPos
+                            var nSum = currentLocalState.currentSum
+                            var nPicked = currentLocalState.pickedPositions.toMutableList()
+                            
+                            when (cmd) {
+                                "ARRIBA" -> if (curPos.y > 0 && !level.walls.contains(curPos.copy(y = curPos.y - 1))) nPos = curPos.copy(y = curPos.y - 1) else currentError = "¡Bip bop! Muro."
+                                "ABAJO" -> if (curPos.y < 4 && !level.walls.contains(curPos.copy(y = curPos.y + 1))) nPos = curPos.copy(y = curPos.y + 1) else currentError = "¡Bip bop! Muro."
+                                "IZQUIERDA" -> if (curPos.x > 0 && !level.walls.contains(curPos.copy(x = curPos.x - 1))) nPos = curPos.copy(x = curPos.x - 1) else currentError = "¡Bip bop! Muro."
+                                "DERECHA" -> if (curPos.x < 4 && !level.walls.contains(curPos.copy(x = curPos.x + 1))) nPos = curPos.copy(x = curPos.x + 1) else currentError = "¡Bip bop! Muro."
+                                "TOMAR" -> {
+                                    val numberAtPos = level.numbers[curPos]
+                                    if (numberAtPos != null && !currentLocalState.pickedPositions.contains(curPos)) {
+                                        nSum += numberAtPos
+                                        nPicked.add(curPos)
+                                    } else {
+                                        currentError = "No hay números aquí"
+                                    }
+                                }
+                                "DEJAR" -> {
+                                    if (curPos == level.targetPos) {
+                                        if (nSum == level.targetSum) {
+                                            // Victoria se marca abajo
+                                        } else {
+                                            currentError = "¡Suma incorrecta! Llevas ${nSum} pero necesito ${level.targetSum}"
+                                        }
+                                    } else {
+                                        currentError = "Solo puedes entregar en la meta"
+                                    }
+                                }
+                            }
+
+                            if (currentError != null) {
+                                playEffect(context, toneGenerator, true)
+                                currentLocalState = currentLocalState.copy(errorMessage = currentError, isExecuting = false, hasAttempted = true, executingCommandIndex = null)
+                                mathState = currentLocalState
+                                break
+                            }
+
+                            playEffect(context, toneGenerator, false)
+                            currentLocalState = currentLocalState.copy(robotPos = nPos, currentSum = nSum, pickedPositions = nPicked)
+                            mathState = currentLocalState
+                            delay(600L)
+                        }
+
+                        if (currentError == null) {
+                            val victory = currentLocalState.robotPos == level.targetPos && currentLocalState.currentSum == level.targetSum && currentLocalState.commands.last() == "DEJAR"
+                            if (victory) {
+                                playVictory(context, toneGenerator)
+                            }
+                            currentLocalState = currentLocalState.copy(
+                                isExecuting = false, 
+                                isVictory = victory, 
+                                errorMessage = if (victory) null else "¡Te faltó entregar en la meta!", 
+                                hasAttempted = true, 
+                                executingCommandIndex = null
+                            )
+                            mathState = currentLocalState
+                        }
+                    }
+                }
+            },
+            enabled = !mathState.isExecuting && !mathState.isVictory && (mathState.commands.isNotEmpty() || mathState.hasAttempted || mathState.errorMessage != null),
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = if (mathState.hasAttempted || mathState.errorMessage != null) Color.Red else Color(0xFFFB8C00)),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Text(text = if (mathState.hasAttempted || mathState.errorMessage != null) "🔄 VOLVER A INTENTAR" else "▶ ¡EMPEZAR!", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        ControlPanel(
+            onCommandAdd = { cmd -> if (!mathState.isExecuting && !mathState.isVictory && !mathState.hasAttempted && mathState.errorMessage == null) mathState = mathState.copy(commands = mathState.commands + cmd) },
+            onClear = { val level = mathLevels[mathState.currentLevelIndex]; mathState = mathState.copy(commands = emptyList(), robotPos = level.robotPos, currentSum = 0, pickedPositions = emptyList(), isVictory = false, hasAttempted = false, executingCommandIndex = null, errorMessage = null) },
+            isExecuting = mathState.isExecuting,
+            isVictory = mathState.isVictory,
+            hasAttempted = mathState.hasAttempted || mathState.errorMessage != null
+        )
+    }
+}
+
+@Composable
+fun MathGameBoard(state: MathGameState) {
+    val level = mathLevels[state.currentLevelIndex]
+    Column(
+        modifier = Modifier.padding(8.dp).border(2.dp, Color.Gray, RoundedCornerShape(8.dp)).background(Color.White)
+    ) {
+        for (y in 0 until 5) {
+            Row {
+                for (x in 0 until 5) {
+                    val pos = Position(x, y)
+                    Box(
+                        modifier = Modifier.size(55.dp).border(0.5.dp, Color.LightGray),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (level.walls.contains(pos)) Text("🧱", fontSize = 26.sp)
+                        
+                        if (level.targetPos == pos) Text("🔋🏁", fontSize = 20.sp)
+                        
+                        val numberAtPos = level.numbers[pos]
+                        if (numberAtPos != null && !state.pickedPositions.contains(pos)) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("💎", fontSize = 20.sp)
+                                Text(
+                                    text = numberAtPos.toString(),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFD4E157)
+                                )
+                            }
+                        }
+                        
+                        if (state.robotPos == pos) Text("🤖", fontSize = 26.sp)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -257,22 +508,18 @@ fun RecordsScreen(recordManager: RecordManager, onBack: () -> Unit) {
 fun GameScreen(
     gameState: GameState,
     onStateChange: (GameState) -> Unit,
-    onBack: () -> Unit,
+    onBack: Unit -> Unit,
     toneGenerator: ToneGenerator?,
     recordManager: RecordManager
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    // El tiempo se reiniciará a 0 automáticamente cada vez que cambiemos de nivel
     var secondsElapsed by remember(gameState.currentLevelIndex) { mutableIntStateOf(0) }
-    
-    // Obtenemos el mejor tiempo actual
     val bestTime = remember(gameState.currentLevelIndex, gameState.isVictory) { 
         recordManager.getBestTime(gameState.currentLevelIndex) 
     }
 
-    // --- CRONÓMETRO ---
     LaunchedEffect(gameState.isExecuting, gameState.isVictory) {
         if (gameState.isExecuting && !gameState.isVictory) {
             while (gameState.isExecuting && !gameState.isVictory) {
@@ -301,7 +548,6 @@ fun GameScreen(
             modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // CABECERA CON VOLVER Y TIEMPO
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -319,7 +565,7 @@ fun GameScreen(
                         modifier = Modifier.clickable { onStateChange(gameState.copy(showLevelSelector = true)) }
                     )
                     Text(
-                        text = "🏆 Mejor: ${bestTime?.let { \"${it}s\" } ?: \"--\"}",
+                        text = "🏆 Mejor: ${bestTime?.let { "${it}s" } ?: "--"}",
                         fontSize = 12.sp,
                         color = Color(0xFF757575)
                     )
@@ -366,7 +612,6 @@ fun GameScreen(
             CommandList(commands = gameState.commands, executingCommandIndex = gameState.executingCommandIndex)
             Spacer(modifier = Modifier.height(8.dp))
 
-            // EJECUTAR
             Button(
                 onClick = {
                     if (gameState.hasAttempted || gameState.errorMessage != null) {
@@ -385,8 +630,7 @@ fun GameScreen(
                     } else {
                         scope.launch {
                             val currentLevel = levels[gameState.currentLevelIndex]
-                            
-                            var currentState = gameState.copy(
+                            var currentLocalState = gameState.copy(
                                 isExecuting = true, 
                                 executingCommandIndex = 0, 
                                 robotPos = currentLevel.robotPos, 
@@ -395,58 +639,58 @@ fun GameScreen(
                                 isVictory = false, 
                                 errorMessage = null
                             )
-                            onStateChange(currentState)
+                            onStateChange(currentLocalState)
                             
-                            val commandsToRun = currentState.commands
+                            val commandsToRun = currentLocalState.commands
                             var currentError: String? = null
 
                             for ((index, cmd) in commandsToRun.withIndex()) {
-                                currentState = currentState.copy(executingCommandIndex = index)
-                                onStateChange(currentState)
+                                currentLocalState = currentLocalState.copy(executingCommandIndex = index)
+                                onStateChange(currentLocalState)
                                 delay(400L)
                                 
-                                val currentPos = currentState.robotPos
+                                val currentPos = currentLocalState.robotPos
                                 var newPos = currentPos
-                                var newHasBox = currentState.hasBox
-                                var newBoxPos = currentState.boxPos
+                                var newHasBox = currentLocalState.hasBox
+                                var newBoxPos = currentLocalState.boxPos
                                 
                                 when (cmd) {
                                     "ARRIBA" -> if (currentPos.y > 0 && !currentLevel.walls.contains(currentPos.copy(y = currentPos.y - 1))) newPos = currentPos.copy(y = currentPos.y - 1) else currentError = "¡Bip bop! Muro."
                                     "ABAJO" -> if (currentPos.y < 4 && !currentLevel.walls.contains(currentPos.copy(y = currentPos.y + 1))) newPos = currentPos.copy(y = currentPos.y + 1) else currentError = "¡Bip bop! Muro."
                                     "IZQUIERDA" -> if (currentPos.x > 0 && !currentLevel.walls.contains(currentPos.copy(x = currentPos.x - 1))) newPos = currentPos.copy(x = currentPos.x - 1) else currentError = "¡Bip bop! Muro."
                                     "DERECHA" -> if (currentPos.x < 4 && !currentLevel.walls.contains(currentPos.copy(x = currentPos.x + 1))) newPos = currentPos.copy(x = currentPos.x + 1) else currentError = "¡Bip bop! Muro."
-                                    "TOMAR" -> if (currentPos == currentState.boxPos && !currentState.hasBox) newHasBox = true else currentError = "No hay nada aquí."
-                                    "DEJAR" -> if (currentState.hasBox) { newHasBox = false; newBoxPos = currentPos } else currentError = "No tengo caja."
+                                    "TOMAR" -> if (currentPos == currentLocalState.boxPos && !currentLocalState.hasBox) newHasBox = true else currentError = "No hay nada aquí."
+                                    "DEJAR" -> if (currentLocalState.hasBox) { newHasBox = false; newBoxPos = currentPos } else currentError = "No tengo caja."
                                 }
 
                                 if (currentError != null) {
                                     playEffect(context, toneGenerator, true)
-                                    currentState = currentState.copy(errorMessage = currentError, isExecuting = false, hasAttempted = true, executingCommandIndex = null)
-                                    onStateChange(currentState)
+                                    currentLocalState = currentLocalState.copy(errorMessage = currentError, isExecuting = false, hasAttempted = true, executingCommandIndex = null)
+                                    onStateChange(currentLocalState)
                                     break
                                 }
 
                                 playEffect(context, toneGenerator, false)
                                 if (newHasBox && newPos != currentPos) newBoxPos = newPos
-                                currentState = currentState.copy(robotPos = newPos, hasBox = newHasBox, boxPos = newBoxPos)
-                                onStateChange(currentState)
+                                currentLocalState = currentLocalState.copy(robotPos = newPos, hasBox = newHasBox, boxPos = newBoxPos)
+                                onStateChange(currentLocalState)
                                 delay(600L)
                             }
 
                             if (currentError == null) {
-                                val victory = currentState.boxPos == currentState.targetPos && !currentState.hasBox
+                                val victory = currentLocalState.boxPos == currentLocalState.targetPos && !currentLocalState.hasBox
                                 if (victory) {
                                     playVictory(context, toneGenerator)
-                                    recordManager.saveBestTime(currentState.currentLevelIndex, secondsElapsed)
+                                    recordManager.saveBestTime(currentLocalState.currentLevelIndex, secondsElapsed)
                                 }
-                                currentState = currentState.copy(
+                                currentLocalState = currentLocalState.copy(
                                     isExecuting = false, 
                                     isVictory = victory, 
                                     errorMessage = if (victory) null else "¡A medias!", 
                                     hasAttempted = true, 
                                     executingCommandIndex = null
                                 )
-                                onStateChange(currentState)
+                                onStateChange(currentLocalState)
                             }
                         }
                     }
@@ -475,13 +719,23 @@ fun GameScreen(
 fun playEffect(context: Context, tg: ToneGenerator?, isError: Boolean) {
     tg?.startTone(if (isError) ToneGenerator.TONE_CDMA_ABBR_ALERT else ToneGenerator.TONE_PROP_BEEP, 100)
     val v = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-    v.vibrate(VibrationEffect.createOneShot(if (isError) 200 else 50, VibrationEffect.DEFAULT_AMPLITUDE))
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        v.vibrate(VibrationEffect.createOneShot(if (isError) 200 else 50, VibrationEffect.DEFAULT_AMPLITUDE))
+    } else {
+        @Suppress("DEPRECATION")
+        v.vibrate(if (isError) 200 else 50)
+    }
 }
 
 fun playVictory(context: Context, tg: ToneGenerator?) {
     tg?.startTone(ToneGenerator.TONE_DTMF_9, 300)
     val v = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-    v.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 100, 50, 100), -1))
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        v.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 100, 50, 100), -1))
+    } else {
+        @Suppress("DEPRECATION")
+        v.vibrate(longArrayOf(0, 100, 50, 100), -1)
+    }
 }
 
 @Composable
@@ -581,25 +835,9 @@ fun CommandList(commands: List<String>, executingCommandIndex: Int?) {
         modifier = Modifier.fillMaxWidth().height(55.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp)).padding(8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        itemsIndexed(commands) { index, cmd ->
-            val isExecuting = executingCommandIndex == index
-            Card(
-                colors = CardDefaults.cardColors(containerColor = if (isExecuting) Color.Yellow else Color.White),
-                elevation = CardDefaults.cardElevation(2.dp)
-            ) {
-                Text(
-                    text = when(cmd) {
-                        "ARRIBA" -> "⬆️"
-                        "ABAJO" -> "⬇️"
-                        "IZQUIERDA" -> "⬅️"
-                        "DERECHA" -> "➡️"
-                        "TOMAR" -> "🖐️"
-                        "DEJAR" -> "📦"
-                        else -> cmd
-                    },
-                    modifier = Modifier.padding(8.dp),
-                    fontSize = 18.sp
-                )
+        itemsIndexed(commands) { index, c ->
+            Card(colors = CardDefaults.cardColors(containerColor = if (executingCommandIndex == index) Color.Yellow else Color.White)) {
+                Text(when(c){"ARRIBA"->"⬆️";"ABAJO"->"⬇️";"IZQUIERDA"->"⬅️";"DERECHA"->"➡️";"TOMAR"->"🖐️";"DEJAR"->"📦";else->c}, modifier = Modifier.padding(8.dp))
             }
         }
     }
