@@ -8,6 +8,8 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -94,6 +96,7 @@ data class MathGameState(
     val robotPos: Position = mathLevels[0].robotPos,
     val currentSum: Int = 0,
     val pickedPositions: List<Position> = emptyList(),
+    val pickedValues: List<Int> = emptyList(),
     val commands: List<String> = emptyList(),
     val isExecuting: Boolean = false,
     val isVictory: Boolean = false,
@@ -259,13 +262,31 @@ fun MathGameScreen(onBack: () -> Unit, toneGenerator: ToneGenerator?) {
             )
         }
         
-        Text(
-            text = "🎒 Mochila actual: ${mathState.currentSum}",
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF4CAF50),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(vertical = 4.dp)
-        )
+        ) {
+            Text(
+                text = "🎒 Mochila: ",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF4CAF50)
+            )
+            AnimatedContent(
+                targetState = mathState.pickedValues,
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
+                }
+            ) { values ->
+                val display = if (values.isEmpty()) "Vacía" else values.joinToString(" + ") + " = ${mathState.currentSum}"
+                Text(
+                    text = display,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFF2E7D32)
+                )
+            }
+        }
 
         if (mathState.errorMessage != null) {
             Text(text = mathState.errorMessage!!, color = Color.Red, fontWeight = FontWeight.Bold)
@@ -304,6 +325,7 @@ fun MathGameScreen(onBack: () -> Unit, toneGenerator: ToneGenerator?) {
                         robotPos = currentLevel.robotPos,
                         currentSum = 0,
                         pickedPositions = emptyList(),
+                        pickedValues = emptyList(),
                         isVictory = false,
                         hasAttempted = false,
                         executingCommandIndex = null,
@@ -318,6 +340,7 @@ fun MathGameScreen(onBack: () -> Unit, toneGenerator: ToneGenerator?) {
                             robotPos = level.robotPos, 
                             currentSum = 0,
                             pickedPositions = emptyList(),
+                            pickedValues = emptyList(),
                             isVictory = false, 
                             errorMessage = null
                         )
@@ -335,6 +358,7 @@ fun MathGameScreen(onBack: () -> Unit, toneGenerator: ToneGenerator?) {
                             var nPos = curPos
                             var nSum = currentLocalState.currentSum
                             var nPicked = currentLocalState.pickedPositions.toMutableList()
+                            var nValues = currentLocalState.pickedValues.toMutableList()
                             
                             when (cmd) {
                                 "ARRIBA" -> if (curPos.y > 0 && !level.walls.contains(curPos.copy(y = curPos.y - 1))) nPos = curPos.copy(y = curPos.y - 1) else currentError = "¡Bip bop! Muro."
@@ -346,6 +370,7 @@ fun MathGameScreen(onBack: () -> Unit, toneGenerator: ToneGenerator?) {
                                     if (numberAtPos != null && !currentLocalState.pickedPositions.contains(curPos)) {
                                         nSum += numberAtPos
                                         nPicked.add(curPos)
+                                        nValues.add(numberAtPos)
                                     } else {
                                         currentError = "No hay números aquí"
                                     }
@@ -371,13 +396,13 @@ fun MathGameScreen(onBack: () -> Unit, toneGenerator: ToneGenerator?) {
                             }
 
                             playEffect(context, toneGenerator, false)
-                            currentLocalState = currentLocalState.copy(robotPos = nPos, currentSum = nSum, pickedPositions = nPicked)
+                            currentLocalState = currentLocalState.copy(robotPos = nPos, currentSum = nSum, pickedPositions = nPicked, pickedValues = nValues)
                             mathState = currentLocalState
                             delay(600L)
                         }
 
                         if (currentError == null) {
-                            val victory = currentLocalState.robotPos == level.targetPos && currentLocalState.currentSum == level.targetSum && currentLocalState.commands.last() == "DEJAR"
+                            val victory = currentLocalState.robotPos == level.targetPos && currentLocalState.currentSum == level.targetSum && currentLocalState.commands.lastOrNull() == "DEJAR"
                             if (victory) {
                                 playVictory(context, toneGenerator)
                             }
@@ -404,7 +429,7 @@ fun MathGameScreen(onBack: () -> Unit, toneGenerator: ToneGenerator?) {
         Spacer(modifier = Modifier.height(8.dp))
         ControlPanel(
             onCommandAdd = { cmd -> if (!mathState.isExecuting && !mathState.isVictory && !mathState.hasAttempted && mathState.errorMessage == null) mathState = mathState.copy(commands = mathState.commands + cmd) },
-            onClear = { val level = mathLevels[mathState.currentLevelIndex]; mathState = mathState.copy(commands = emptyList(), robotPos = level.robotPos, currentSum = 0, pickedPositions = emptyList(), isVictory = false, hasAttempted = false, executingCommandIndex = null, errorMessage = null) },
+            onClear = { val level = mathLevels[mathState.currentLevelIndex]; mathState = mathState.copy(commands = emptyList(), robotPos = level.robotPos, currentSum = 0, pickedPositions = emptyList(), pickedValues = emptyList(), isVictory = false, hasAttempted = false, executingCommandIndex = null, errorMessage = null) },
             isExecuting = mathState.isExecuting,
             isVictory = mathState.isVictory,
             hasAttempted = mathState.hasAttempted || mathState.errorMessage != null
@@ -443,7 +468,28 @@ fun MathGameBoard(state: MathGameState) {
                             }
                         }
                         
-                        if (state.robotPos == pos) Text("🤖", fontSize = 26.sp)
+                        if (state.robotPos == pos) {
+                            Box(contentAlignment = Alignment.BottomEnd) {
+                                Text("🤖", fontSize = 26.sp)
+                                if (state.currentSum > 0) {
+                                    Surface(
+                                        color = Color(0xFF4CAF50),
+                                        shape = CircleShape,
+                                        modifier = Modifier.size(24.dp).offset(x = 10.dp, y = (-10).dp),
+                                        shadowElevation = 4.dp
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = state.currentSum.toString(),
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Black
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -508,7 +554,7 @@ fun RecordsScreen(recordManager: RecordManager, onBack: () -> Unit) {
 fun GameScreen(
     gameState: GameState,
     onStateChange: (GameState) -> Unit,
-    onBack: Unit -> Unit,
+    onBack: () -> Unit,
     toneGenerator: ToneGenerator?,
     recordManager: RecordManager
 ) {
@@ -862,7 +908,7 @@ fun ControlPanel(
             ControlButton("➡️", "DERECHA", onCommandAdd, disabled)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ControlButton("🗑️", "CLEAR", { onClear() }, isExecuting || isVictory, Color(0xFFFFCCBC))
+            ControlButton("🗑️", "CLEAR", { _ -> onClear() }, isExecuting || isVictory, Color(0xFFFFCCBC))
             ControlButton("⬇️", "ABAJO", onCommandAdd, disabled)
             ControlButton("📦", "DEJAR", onCommandAdd, disabled, Color(0xFFC8E6C9))
         }
